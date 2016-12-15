@@ -1,0 +1,242 @@
+{
+  sample: function() {
+    var list = d3.range(10 + Math.round(Math.random() * 4));
+    var items = d3.range(3 + Math.round(Math.random() * 2));
+    return {
+      order: [{name: "Year", data: list.map(function(d,i) { return 1990 + d; })}],
+      values: items.map(function(d) { return {name: "Q" + (d+1), data: list.map(function() { 
+        return parseInt(Math.random() * 90 + 10);
+      })}})
+    };
+  },
+  dimension: {
+    values: { type: [plotdb.Number], require: true, multiple: true, desc: "values in a bar stack" },
+    order: { type: [plotdb.Order], require: false, desc: "order of each bar stack" }
+  },
+  config: {
+    fontFamily: {},
+    background: {},
+    textFill: {},
+    fontSize: {},
+    margin: {},
+    padding: {default: 2},
+    palette: {},
+    sort: { type: [plotdb.Choice(["None", "Ascending","Descending"])], default: "None" },
+    yAxisShow: {},
+    yAxisLabel: {},
+    yAxisTickSizeInner: {default: 0},
+    yAxisTickSizeOuter: {},
+    yAxisTickPadding: {},
+    yAxisHandleOverlap: {default: "none"},
+    yAxisTickCount: {default: 0},
+    yAxisStroke: {},
+    xAxisShowDomain: {default: false},
+    xAxisShow: {},
+    xAxisLabel: {},
+    xAxisTickSizeInner: {},
+    xAxisTickSizeOuter: {},
+    xAxisTickPadding: {},
+    xAxisTickCount: {},
+    xAxisStroke: {},
+    xAxisShowDomain: {default: false},
+    legendLabel: {},
+    legendShow: {},
+    popupShow: {},
+    boxRoundness: {}
+  },
+  init: function() {
+    var that = this;
+    this.svg = d3.select(this.root).append("svg");
+    this.legendGroup = this.svg.append("g").attr({class: "legend-group"});
+    this.yAxisGroup = this.svg.append("g").attr({class: "axis vertical"});
+    this.xAxisGroup = this.svg.append("g").attr({class: "axis horizontal"});
+    this.popup = plotd3.html.popup(this.root).on("mousemove", function(d,i,popup) {
+      popup.select(".title").text(that.names[d.idx]);
+      popup.select(".value div").text(d.order);
+      popup.select(".value span").text((Math.round(d.size * 100)) + "%");
+    });
+    this.popupNode = this.popup.getPopupNode();
+    this.popupNode.select(".value").append("div");
+    this.popupNode.select(".value").append("span");
+  },
+  parse: function() {
+    plotdb.Order.sort(this.data, "order");
+    this.names = this.dimension.values.fieldName;
+    this.orders = this.data.map(function(it) { return it.order; });
+    this.parsed = null;
+    this.parsed = this.data.map(function(it) {
+      var total = it.values.reduce(function(a,b) { return a + b; }, 0);
+      var values = [], lastOffset = 0;
+      for(var idx = 0; idx < it.values.length; idx ++) {
+        values.push({
+          order: it.order,
+          size: it.values[idx] / total,
+          offset: lastOffset,
+          idx: idx,
+          value: it.values[idx]
+        });
+        lastOffset += (it.values[idx] / total);
+      }
+      return {
+        order: it.order,
+        values: values
+      };
+    });
+  },
+  bind: function() {
+    var that = this,sel;
+    sel = this.svg.selectAll("g.data-group").data(this.parsed);
+    sel.exit().attr("class","").transition("exit").duration(500).attr("opacity",0).remove();
+    sel.enter().append("g").attr({class: "data-group"});
+    this.svg.selectAll("g.data-group").each(function(d,i) {
+      var node = d3.select(this);
+      var sel = node.selectAll("rect.data").data(d.values);
+      sel.exit().attr("class","").transition("exit").duration(500).attr("opacity",0).remove();
+      sel.enter().append("rect").attr({class: "data", opacity: 0});
+    });
+    if(this.config.popupShow) this.popup.nodes(this.svg.selectAll("rect.data"));
+  },
+  resize: function() {
+    var that = this;
+    var box = this.root.getBoundingClientRect();
+    var svgbox = d3.select(this.root).select("svg")[0][0].getBoundingClientRect();
+    var width = this.width = box.width;
+    var height = this.height = box.height;
+    this.svg.attr({
+      width: width + "px", height: height + "px",
+      viewBox: [0,0,width,height].join(" "),
+      preserveAspectRatio: "xMidYMid"
+    });
+    this.popup.fontSize(this.config.fontSize);
+    this.cScale = d3.scale.ordinal()
+      .range(this.config.palette.colors.map(function(it) { return it.hex; }));
+    this.legend = plotd3.rwd.legend()
+      .orient("bottom")
+      .scale(this.cScale)
+      .label(this.config.legendLabel || "")
+      .tickValues(this.names)
+      .fontSize(this.config.fontSize)
+      .size([this.width - 2 * this.config.margin, 100]);
+    this.legendGroup.call(this.legend).selectAll(".legend").on("mouseover", function(d,i) {
+      that.activeGroup = i + 1;
+      that.render();
+    }).on("mouseout", function() {
+      that.activeGroup = 0;
+      that.render();
+    });
+    this.legendSize = (this.config.legendShow ? this.legend.offset() : [0,0]);
+    var orders = this.orders.map(function(d,i) { return d; });
+    if(this.config.sort!="None") {
+      orders.sort(function(a,b) {
+        return ( that.config.sort=="Ascending" ? 1 : -1 ) *
+          (a > b ? 1 : (a < b ? -1 : 0));
+      });
+    }
+    this.yScale = d3.scale.ordinal()
+      .domain(orders)
+      .rangeBands([
+        this.config.margin,
+        this.height - this.config.margin 
+          - (this.config.legendShow ? (this.legendSize[1] + this.config.fontSize) : 0)
+      ]);
+    this.yAxis = plotd3.rwd.axis()
+      .orient("left")
+      .scale(this.yScale)
+      .label(this.config.yAxisLabel || "")
+      .labelPosition(this.config.yAxisLabelPosition)
+      .ticks(this.config.yAxisTickCount)
+      .tickSize(this.config.yAxisTickSizeInner, this.config.yAxisTickSizeOuter)
+      .tickPadding(this.config.yAxisTickPadding)
+      .handleOverlap(this.config.yAxisHandleOverlap)
+      .fontSize(this.config.fontSize);
+    this.yAxisGroup.call(this.yAxis);
+    this.yAxisWidth = (this.config.yAxisShow ? this.yAxis.offset() : 0);
+    this.xScale = d3.scale.linear().domain([0,1]).range([
+      this.yAxisWidth + this.config.fontSize * 0.5 + this.config.margin,
+      this.width - this.config.margin
+    ]);
+    this.xAxis = plotd3.rwd.axis()
+      .orient("bottom")
+      .scale(this.xScale)
+      .fontSize(this.config.fontSize)
+      .tickValues(this.xScale.ticks(this.config.xAxisTickCount))
+      .label(this.config.xAxisLabel || "")
+      .labelPosition(this.config.xAxisLabelPosition)
+      .tickSize(this.config.xAxisTickSizeInner, this.config.xAxisTickSizeOuter)
+      .tickPadding(this.config.xAxisTickPadding)
+      .ticks(this.config.xAxisTickCount)
+      .tickFormat(function(d,i) { return Math.round(d * 100) + "%" })
+      .boundaryTickInside(true);
+    this.xAxisGroup.call(this.xAxis);
+    this.xAxisHeight = (this.config.xAxisShow ? this.xAxis.offset() : 0);
+    this.yScale.rangeBands([
+      this.config.margin,
+      this.height - this.config.margin - this.xAxisHeight
+        - (this.config.legendShow ? (this.legendSize[1] + this.config.fontSize) : 0)
+    ]);
+    this.yAxisGroup.call(this.yAxis);
+    this.barHeight = this.yScale.rangeBand();
+    var rate = this.config.padding / this.barHeight;
+    if(rate > 0.5) rate = 0.5;
+    if(this.barHeight < 8) rate = (this.barHeight - 4) / this.barHeight;
+    if(rate < 0) rate = 0;
+    this.yScale.rangeBands([
+      this.config.margin,
+      this.height - this.config.margin - this.xAxisHeight
+        - (this.config.legendShow ? (this.legendSize[1] + this.config.fontSize) : 0)
+    ], rate,0);
+    this.yAxisGroup.call(this.yAxis);
+    this.barHeight = this.yScale.rangeBand();
+  },
+  render: function() {
+    var that = this,sel;
+    if(this.config.fontFamily) d3.select(this.root).style("font-family", this.config.fontFamily);
+    d3.select(this.root).style("background-color", this.config.background);
+    this.svg.selectAll("text").attr({
+      "font-size": that.config.fontSize,
+      "fill": that.config.textFill
+    });
+    this.xAxisGroup.selectAll(".domain").attr({ display: (this.config.xAxisShowDomain ? "block" : "none")});
+    this.yAxisGroup.selectAll(".domain").attr({ display: (this.config.yAxisShowDomain ? "block" : "none")});
+    this.yAxisGroup.selectAll("path,line").attr({ stroke: that.config.yAxisStroke });
+    this.xAxisGroup.selectAll("path,line").attr({ stroke: that.config.xAxisStroke });
+    this.legendGroup.attr({
+      transform: ["translate(",
+      (this.width - this.legendSize[0])/2,
+      this.height - (this.legendSize[1]) - this.config.margin,
+      ")"].join(" "),
+      display: this.config.legendShow ? "block" : "none"
+    });
+    this.yAxisGroup.attr({
+      transform: ["translate(",this.yAxisWidth + this.config.margin,0,")"].join(" "),
+      display: this.config.yAxisShow ? "block" : "none"
+    });
+    this.xAxisGroup.attr({
+      transform: "translate(0 " + (this.height - this.config.margin - this.xAxisHeight - (this.config.legendShow ? this.legendSize[1] + this.config.fontSize : 0)) + ")",
+      display: this.config.xAxisShow ? "block" : "none"
+    });
+    var dataGroup = this.svg.selectAll("g.data-group");
+    dataGroup.transition("morph").duration(function() { return d3.select(this).attr("transform") ? 500 : 0; }).attr({
+      transform: function(d,i) { return "translate(0 " + that.yScale(d.order) + ")"; }
+    });
+    dataGroup.each(function(d,i) {
+      var node = d3.select(this), sel;
+      sel = node.selectAll("rect.data")
+      node.selectAll("rect.data").attr({
+        fill: function(d,i) { return that.cScale(that.names[i]); }
+      }).transition("morph").duration(500).attr({
+        x: function(d) { return that.xScale(d.offset); },
+        y: 0,
+        width: function(d) { return that.xScale(d.offset + d.size) - that.xScale(d.offset); },
+        height: that.barHeight,
+        rx: that.config.boxRoundness,
+        ry: that.config.boxRoundness
+      });
+      node.selectAll("rect.data").transition("opacity").duration(500).attr({
+        opacity: function(d,i) {
+          return (!that.activeGroup || that.activeGroup == (i + 1) ? 1 : 0.1);
+        }
+      });
+    });
+  }
+}
